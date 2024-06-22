@@ -68,6 +68,11 @@ https://ninenines.eu/docs/en/cowboy/2.12/manual/cowboy_websocket/
 https://ninenines.eu/docs/en/cowboy/2.12/manual/cowboy_stream
 
 
+### 先了解RPC
+
+
+![alt text](image.png)
+
 
 ### 这里mark一下gen-server模版
 
@@ -185,3 +190,93 @@ code_change(OldVsn, State, Extra) ->
 %% Internal functions
 %% ====================================================================
 ```
+
+
+client添加了一下
+```erlang
+% add
+init([]) ->
+    SomeHostInNet = "localhost", % to make it runnable on one machine
+    {ok, Sock} = gen_tcp:connect(SomeHostInNet, 5678, 
+                                 [binary, {packet, 0}]),
+    % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
+    % 这允许我们控制何时接收数据，减少不必要的消息处理，并避免潜在的消息积压。
+    inet:setopts(Sock, [{active, once}]),
+    {ok, #state{socket = Sock}}.
+
+handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
+    % 处理从服务器接收到的数据
+    io:format("Received: ~p~n", [Data]),
+    % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, State};
+```
+
+然后就是protocol，这是主要负责client stub的解包和加密包
+```erlang
+% 支持int
+% packet length: 4
+% model name length: 2
+% model name :variable
+% function name length: 2
+% function name: variable
+% parameter size: 2
+% parmeters: ...
+```
+具体设计如上，具体实现看代码吧
+
+
+rpcServer大概必须代码如下
+```erlang
+-module(rpc_server).
+
+-export([start_server/1,
+         start_link/4,
+         init/2]).
+
+% 定义服务器的状态记录，包含传输方式、套接字和缓冲区。
+-record(state, {transport,
+                socket,
+                buffer}).
+
+% 启动RPC服务器监听指定的端口。
+start_server(Port)->
+    ranch:start_listener(?MODULE, ranch_tcp, [{port, Port}], ?MODULE, undefined).
+
+% 为每个连接创建一个新的进程。
+start_link(Ref, _Socket, Transport, _Opts)->
+    Pid = spawn_link(?MODULE, init, [Ref, Transport]),
+    {ok, Pid}.
+
+% 初始化新连接的进程。
+init(Ref, Transport)->
+    {ok, Socket} = ranch:handshake(Ref), % 完成ranch的握手过程。
+    Buffer = rpc_protocol:new(), % 初始化一个新的缓冲区。
+    loop(#state{transport=Transport, socket=Socket, buffer=Buffer}). % 进入循环处理消息。
+
+% 主循环，处理接收到的消息和事件。
+loop(ok)->ok;
+loop(#state{transport = Transport, socket = Socket}=State)->
+    % 获取传输层的消息状态。
+    {OK, Closed, Error} = Transport:messages(),
+    Transport:setopts(Socket, [{active, once}]), % 设置套接字为主动一次模式。
+    Result =
+        receive
+            % 接收到数据。
+            {OK, Socket, Data}->
+                {Resp, State0} = handle_data(Data, State), % 处理接收到的数据。
+                reply(Resp, State0); % 回复请求。
+            % 连接关闭。
+            {Closed, Socket}-> ok;
+            % 出现错误。
+            {Error, Socket, _Error}-> ok
+        end,
+    % 继续循环。
+    loop(Result).
+```
+然后实现handle_data以及reply就是一个完整的rpcServer过程
+
+写完就会发现Rpc_server本质上实现的是图中的
+
+receive-> unpack ->apply ->reply过程
+

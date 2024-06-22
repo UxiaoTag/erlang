@@ -12,7 +12,7 @@
 %% ====================================================================
 %% Behavioural functions
 %% ====================================================================
--record(state, {}).
+-record(state, {socket}).
 
 %% init/1
 %% ====================================================================
@@ -26,8 +26,14 @@
     State :: term(),
     Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
-init([]) ->
-    {ok, #state{}}.
+init([Port]) ->
+    SomeHostInNet = "localhost", % to make it runnable on one machine
+    {ok, Sock} = gen_tcp:connect(SomeHostInNet, Port, 
+                                 [binary, {packet, 0}]),
+    % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
+    % 这允许我们控制何时接收数据，减少不必要的消息处理，并避免潜在的消息积压。
+    inet:setopts(Sock, [{active, once}]),
+    {ok, #state{socket = Sock}}.
 
 
 %% handle_call/3
@@ -78,6 +84,12 @@ handle_cast(Msg, State) ->
     NewState :: term(),
     Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
+handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
+    % 处理从服务器接收到的数据
+    io:format("Received: ~p~n", [Data]),
+    % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
+    inet:setopts(Socket, [{active, once}]),
+    {noreply, State};
 handle_info(Info, State) ->
     {noreply, State}.
 
