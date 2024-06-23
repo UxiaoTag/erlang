@@ -226,7 +226,7 @@ handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
 具体设计如上，具体实现看代码吧
 
 
-rpcServer大概必须代码如下
+rpcServer主要用ranch写的，ranchtcp封装的话可以简化不少代码
 ```erlang
 -module(rpc_server).
 

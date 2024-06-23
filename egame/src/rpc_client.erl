@@ -5,14 +5,37 @@
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([]).
-
+-export([start_link/1]).
+-export([call/3]).
+-define(SERVER, ?MODULE).
 
 
 %% ====================================================================
 %% Behavioural functions
 %% ====================================================================
--record(state, {socket}).
+-record(state, {socket,buffer,caller}).
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%% @end
+%%--------------------------------------------------------------------
+-spec start_link(integer()) -> {ok, Pid :: pid()} |
+        {error, Error :: {already_started, pid()}} |
+        {error, Error :: term()} |
+        ignore.
+start_link(Port) ->
+  gen_server:start_link({local, ?SERVER}, ?MODULE, [Port], []).
+
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
+call(Moudle,Function,Params)->
+  gen_server:call(?SERVER,{Moudle,Function,Params}).
 
 %% init/1
 %% ====================================================================
@@ -27,13 +50,13 @@
     Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
 init([Port]) ->
-    SomeHostInNet = "localhost", % to make it runnable on one machine
+    SomeHostInNet = "127.0.0.1", % to make it runnable on one machine
     {ok, Sock} = gen_tcp:connect(SomeHostInNet, Port, 
                                  [binary, {packet, 0}]),
     % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
     % 这允许我们控制何时接收数据，减少不必要的消息处理，并避免潜在的消息积压。
     inet:setopts(Sock, [{active, once}]),
-    {ok, #state{socket = Sock}}.
+    {ok, #state{socket = Sock,buffer = rpc_protocol:new()}}.
 
 
 %% handle_call/3
@@ -53,9 +76,12 @@ init([Port]) ->
     Timeout :: non_neg_integer() | infinity,
     Reason :: term().
 %% ====================================================================
-handle_call(Request, From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call({Moudle,Function,Params}, From,
+            #state{socket = Socket}=State) ->
+    Binary=rpc_protocol:encode(Moudle,Function,Params),
+    ok=gen_tcp:send(Socket,Binary),
+    % ok之后还要判断
+    {noreply, State#state{caller = From}}.
 
 
 %% handle_cast/2
@@ -69,7 +95,7 @@ handle_call(Request, From, State) ->
     NewState :: term(),
     Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
-handle_cast(Msg, State) ->
+handle_cast(_Msg, State) ->
     {noreply, State}.
 
 
@@ -85,12 +111,13 @@ handle_cast(Msg, State) ->
     Timeout :: non_neg_integer() | infinity.
 %% ====================================================================
 handle_info({tcp, Socket, Data}, #state{socket = Socket} = State) ->
+    State0=handle_data(Data,State),
     % 处理从服务器接收到的数据
     io:format("Received: ~p~n", [Data]),
     % 设置套接字为活动模式，但仅在下一次数据到达时发送通知。
     inet:setopts(Socket, [{active, once}]),
-    {noreply, State};
-handle_info(Info, State) ->
+    {noreply, State0};
+handle_info(_Info, State) ->
     {noreply, State}.
 
 
@@ -103,8 +130,12 @@ handle_info(Info, State) ->
             | {shutdown, term()}
             | term().
 %% ====================================================================
-terminate(Reason, State) ->
+terminate(_Reason, #state{socket = undefined}) ->
+    ok;
+terminate(_Reason, #state{socket = Socket})-> 
+    gen_tcp:close(Socket),
     ok.
+
 
 
 %% code_change/3
@@ -115,10 +146,19 @@ terminate(Reason, State) ->
     OldVsn :: Vsn | {down, Vsn},
     Vsn :: term().
 %% ====================================================================
-code_change(OldVsn, State, Extra) ->
+code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+handle_data(Data,#state{buffer = Buffer,caller = Caller}=State)->
+    {Reps,Buffer0}=rpc_protocol:decode(Data,Buffer),
+    case Reps of
+        [Rep]->
+            gen_server:reply(Caller,Rep),
+            State#state{buffer = Buffer0,caller = undefined}; 
+        []->
+            State#state{buffer = Buffer0}
+        end.

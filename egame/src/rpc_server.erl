@@ -47,7 +47,7 @@ loop(#state{transport = Transport, socket = Socket}=State)->
 % 处理接收到的数据。
 handle_data(Data, #state{buffer = Buffer}=State)->
     % 使用rpc_protocol:decode解码数据。
-    {Reqs, Buffer0} = rpc_protocol:decode(Buffer, Data),
+    {Reqs, Buffer0} = rpc_protocol:decode(Data,Buffer),
     Reps = handle_request(Reqs), % 处理请求。
     {Reps, State#state{buffer=Buffer0}}. % 更新状态并返回。
 
@@ -61,6 +61,7 @@ handle_request(Reqs)->
 handle_request([], Acc)->
     lists:reverse(Acc);
 handle_request([{Module, Function, Params}|T], Acc)->
+    % 这里应该有个try catch，以处理应用函数调用的异常。
     % 应用函数并处理请求。
     Rep = erlang:apply(Module, Function, Params),
     % 继续处理剩余的请求。
