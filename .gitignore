@@ -20,3 +20,5 @@ log
 .erlang.mk
 deps
 egame.d
+thrift-0.20.0.tar.gz
+/thrift-0.20.0/
